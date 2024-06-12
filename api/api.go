@@ -1,55 +1,35 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os/exec"
+	"path"
 
 	"github.com/gorilla/websocket"
 )
 
-type rcError struct {
-	err string
-}
-
-func (e rcError) Error() string {
-	return e.err
-}
-
-func NewError(msg string) rcError {
-	return rcError{
-		err: msg,
+func NewServerConnection(configFilename string) (*ServerConn, error) {
+	config, err := LoadConfig(configFilename)
+	if err != nil {
+		return nil, err
 	}
-}
 
-// Messages' structs
-type registerMsg struct { // register
-	Login string `json:"login"`
-}
-
-type ServerConn struct {
-	serverURL  string
-	login      string
-	password   string
-	conn       *websocket.Conn
-	readerChan chan []byte
-	doneChan   chan struct{}
-}
-
-func NewServerConnection(url string, login string, password string) *ServerConn {
 	return &ServerConn{
-		serverURL:  url,
-		login:      login,
-		password:   password,
+		configFilename: configFilename,
+		config:         config,
+
 		conn:       nil,
 		readerChan: make(chan []byte, 3),
 		doneChan:   make(chan struct{}),
-	}
+	}, nil
 }
 
 func (c *ServerConn) register() error {
 	// Write registration
 	buf, err := WriteMsg("registration", registerMsg{
-		Login: c.login,
+		Login: c.config.Login,
 	})
 	if err != nil {
 		return err
@@ -74,8 +54,46 @@ func (c *ServerConn) register() error {
 	return nil
 }
 
+type mainLoopMsg struct {
+	Password string          `json:"password"`
+	Type     string          `json:"type"`
+	Content  json.RawMessage `json:"content"`
+}
+
+func (c *ServerConn) handleMsg(buf []byte) error {
+	var rawMsg mainLoopMsg
+	if err := json.Unmarshal(buf, &rawMsg); err != nil {
+		return err
+	}
+	if rawMsg.Password != c.config.Password {
+		return NewError("Wrong password")
+	}
+	switch rawMsg.Type {
+	case "script":
+		var msg striptMsg
+		if err := json.Unmarshal(rawMsg.Content, &msg); err != nil {
+			return err
+		}
+		for i := range len(c.config.Scripts) {
+			if c.config.Scripts[i].Name == msg.Name {
+				filepath := c.config.Scripts[i].File
+				if !path.IsAbs(filepath) {
+					filepath = path.Join(path.Dir(c.configFilename), filepath)
+				}
+				cmd := exec.Command(filepath + " " + msg.Query)
+				if err := cmd.Start(); err != nil {
+					return err
+				}
+				return nil
+			}
+		}
+		return NewError("No script with name: " + msg.Name)
+	}
+	return NewError("Message type '" + rawMsg.Type + "' is not supported.")
+}
+
 func (c *ServerConn) Run() error {
-	conn, _, err := websocket.DefaultDialer.Dial(c.serverURL, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(c.config.URL, nil)
 	c.conn = conn
 	if err != nil {
 		return err
@@ -89,8 +107,6 @@ func (c *ServerConn) Run() error {
 		return err
 	}
 	log.Println("REGISTRATION COMPLETE!!!!")
-
-	// Start reader
 
 	// Starting reader goroutine
 	go func() {
@@ -110,19 +126,24 @@ func (c *ServerConn) Run() error {
 			}
 		}
 		close(c.doneChan)
-		log.Println("Close reader goroutine")
 	}()
 
+	// Reading cycle
 	for {
 		select {
 		case <-c.doneChan:
-			log.Print("Close read cycle")
 			return nil
 		case buf := <-c.readerChan:
-			log.Println("GOT BIN MSG:", string(buf))
+			msg := "OK"
+			if err := c.handleMsg(buf); err != nil {
+				msg = "ERROR: " + err.Error()
+				log.Println("HANDLE ERROR:", err.Error())
+			}
+			if err := c.conn.WriteMessage(websocket.BinaryMessage, []byte(msg)); err != nil {
+				log.Println("WRITE ERROR: ", err.Error())
+			}
 		}
 	}
-	return nil
 }
 
 func (c *ServerConn) Close() error {

@@ -1,0 +1,11 @@
+{
+  "url": "ws://localhost:3047/client_service",
+  "login": "cgsg95",
+  "password": "aboba",
+  "scripts": [
+    {
+      "name": "test",
+      "file": "./out/test.bat"
+    }
+  ]
+}

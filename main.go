@@ -12,21 +12,25 @@ import (
 func main() {
 	fmt.Println("CGSG forever!!!")
 
-	var login = flag.String("l", "Default", "Login")
-	var password = flag.String("p", "12345", "Password")
+	var configPath = flag.String("c", "./config.json", "File name of config(relative or global)")
 	flag.Parse()
 
-	fmt.Println("Login:", *login, "Password:", *password)
+	// Start ssytem interupt handler
+	cs, err := api.NewServerConnection(*configPath)
+	if err != nil {
+		log.Println("Server connection error:", err.Error())
+	}
 
+	// Handling interupt
 	interupt := make(chan os.Signal, 1)
 	signal.Notify(interupt, os.Interrupt)
-	// Start ssytem interupt handler
-	cs := api.NewServerConnection("ws://localhost:3047/client_service", *login, *password)
 	go func() {
 		signal := <-interupt
 		log.Println("Got interupt signal: ", signal.String())
 		cs.Close()
 	}()
+
+	// Main loop
 	if err := cs.Run(); err != nil {
 		log.Println("RUN finished with ERROR:", err)
 	}
