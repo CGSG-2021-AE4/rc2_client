@@ -109,19 +109,19 @@ func (c *ServerConn) Run() error {
 				c.readerChan <- buf
 			}
 		}
-		log.Println("Close reader goroutine")
 		close(c.doneChan)
+		log.Println("Close reader goroutine")
 	}()
 
 	for {
 		select {
 		case <-c.doneChan:
-			break
+			log.Print("Close read cycle")
+			return nil
 		case buf := <-c.readerChan:
 			log.Println("GOT BIN MSG:", string(buf))
 		}
 	}
-	log.Print("Close read cycle")
 	return nil
 }
 
