@@ -1,63 +1,33 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-
-	"github.com/gorilla/websocket"
+	"ws_client/api"
 )
-
-var login = "AAAAA"
-
-// Messages' structs
-type registerMsg struct { // register
-	Login string `json:"login"`
-}
 
 func main() {
 	fmt.Println("CGSG forever!!!")
 
+	var login = flag.String("l", "Default", "Login")
+	var password = flag.String("p", "12345", "Password")
+	flag.Parse()
+
+	fmt.Println("Login:", *login, "Password:", *password)
+
 	interupt := make(chan os.Signal, 1)
 	signal.Notify(interupt, os.Interrupt)
-
-	c, _, err := websocket.DefaultDialer.Dial("ws://localhost:3047/client_service", nil)
-	if err != nil {
-		log.Fatal("Dial error: ", err)
+	// Start ssytem interupt handler
+	cs := api.NewServerConnection("ws://localhost:3047/client_service", *login, *password)
+	go func() {
+		signal := <-interupt
+		log.Println("Got interupt signal: ", signal.String())
+		cs.Close()
+	}()
+	if err := cs.Run(); err != nil {
+		log.Println("RUN finished with ERROR:", err)
 	}
-	defer c.Close()
-
-	// Write registration
-	buf, err := WriteMsg("registration", registerMsg{
-		Login: login,
-	})
-	if err != nil {
-		log.Println("Registration json error: ", err)
-		return
-	}
-	if err := c.WriteMessage(websocket.BinaryMessage, buf); err != nil {
-		log.Println("Registration write error: ", err)
-		return
-	}
-	_, buf, err = c.ReadMessage()
-	mt, msg, err := ReadMsg[string](buf)
-	if mt == "error" {
-		log.Println("Registration error: ", msg)
-		return
-	} else if mt != "msg" || msg != "Registration complete" {
-		log.Println("Invalid registration responce: ", msg)
-		return
-	}
-	log.Println("REGISTRATION COMPLETE!!!!")
-
-	for {
-		wsmt, buf, err := c.ReadMessage()
-		if err != nil {
-			log.Println("READ ERROR: ", err)
-			return
-		}
-		log.Println("GO MSG: ", websocket.FormatMessageType(wsmt), buf)
-	}
-
 }
