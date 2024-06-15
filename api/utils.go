@@ -5,18 +5,6 @@ import (
 	"os"
 )
 
-// Errors
-
-func (e rcError) Error() string {
-	return e.err
-}
-
-func NewError(msg string) rcError {
-	return rcError{
-		err: msg,
-	}
-}
-
 // Config
 func LoadConfig(filename string) (*Config, error) {
 	var config Config
@@ -29,4 +17,11 @@ func LoadConfig(filename string) (*Config, error) {
 		return nil, err
 	}
 	return &config, nil
+}
+
+// Error implementation - found in Effective Go
+type rcError string
+
+func (err rcError) Error() string {
+	return string(err)
 }

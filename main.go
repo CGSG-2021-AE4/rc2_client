@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync/atomic"
+	"time"
 	"ws_client/api"
 )
 
@@ -14,24 +16,50 @@ func main() {
 
 	var configPath = flag.String("c", "./config.json", "File name of config(relative or global)")
 	flag.Parse()
-
-	// Start ssytem interupt handler
-	cs, err := api.NewServerConnection(*configPath)
-	if err != nil {
-		log.Println("Server connection error:", err.Error())
-	}
+	var globalCS atomic.Pointer[api.ServerConn]
 
 	// Handling interupt
 	interupt := make(chan os.Signal, 1)
+	done := make(chan struct{})
 	signal.Notify(interupt, os.Interrupt)
+
 	go func() {
 		signal := <-interupt
 		log.Println("Got interupt signal: ", signal.String())
-		cs.Close()
+		cs := globalCS.Load()
+		if cs != nil {
+			log.Println("AAAA")
+			if err := cs.Close(); err != nil {
+				log.Println(err.Error())
+			}
+		}
+		close(done)
 	}()
 
-	// Main loop
-	if err := cs.Run(); err != nil {
-		log.Println("RUN finished with ERROR:", err)
+	reconnecting := false
+
+	for {
+		if reconnecting {
+			log.Println("Reconnecting...")
+			<-time.After(2 * time.Second)
+		}
+		select {
+		case <-done:
+			os.Exit(0)
+		default:
+			cs, err := api.NewServerConnection(*configPath)
+			if err != nil {
+				log.Println("Server connection error:", err.Error())
+			}
+			globalCS.Store(cs)
+
+			// Main loop
+			if err := cs.Run(); err != nil {
+				log.Println("RUN finished with ERROR:", err)
+			}
+			globalCS.Store(nil)
+
+			reconnecting = true // TODO remove reconnect print after interupt
+		}
 	}
 }

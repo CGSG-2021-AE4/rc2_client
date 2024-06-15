@@ -2,12 +2,12 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
+	"net"
 	"os/exec"
 	"path"
 
-	"github.com/gorilla/websocket"
+	cw "github.com/CGSG-2021-AE4/go_utils/conn_wrapper"
 )
 
 func NewServerConnection(configFilename string) (*ServerConn, error) {
@@ -21,35 +21,32 @@ func NewServerConnection(configFilename string) (*ServerConn, error) {
 		config:         config,
 
 		conn:       nil,
-		readerChan: make(chan []byte, 3),
+		readerChan: make(chan readMsg, 3),
 		doneChan:   make(chan struct{}),
 	}, nil
 }
 
 func (c *ServerConn) register() error {
 	// Write registration
-	buf, err := WriteMsg("registration", registerMsg{
+	buf, err := json.Marshal(registerMsg{
 		Login: c.config.Login,
 	})
 	if err != nil {
 		return err
 	}
-	if err := c.conn.WriteMessage(websocket.BinaryMessage, buf); err != nil {
+	if err := c.conn.Write(cw.MsgTypeRegistration, buf); err != nil {
 		return err
 	}
-	wsmt, buf, err := c.conn.ReadMessage()
+	// Wait for response - error/ok
+	mt, buf, err := c.conn.Read()
 	if err != nil {
 		return err
 	}
-	if wsmt == websocket.CloseMessage {
-		return NewError("Close msg: " + string(buf))
+	if mt == cw.MsgTypeClose {
+		return rcError("Close msg: " + string(buf))
 	}
-	mt, msg, err := ReadMsg[string](buf)
-	if err != nil {
-		return err
-	}
-	if mt != "msg" || msg != "Registration complete" {
-		return NewError("Invalid registration responce: " + msg)
+	if mt != cw.MsgTypeOk || string(buf) != "Registration complete" {
+		return rcError("Invalid registration responce: " + string(buf))
 	}
 	return nil
 }
@@ -60,13 +57,13 @@ type mainLoopMsg struct {
 	Content  json.RawMessage `json:"content"`
 }
 
-func (c *ServerConn) handleMsg(buf []byte) error {
+func (c *ServerConn) handleRequest(buf []byte) error {
 	var rawMsg mainLoopMsg
 	if err := json.Unmarshal(buf, &rawMsg); err != nil {
 		return err
 	}
 	if rawMsg.Password != c.config.Password {
-		return NewError("Wrong password")
+		return rcError("Wrong password")
 	}
 	switch rawMsg.Type {
 	case "script":
@@ -87,19 +84,19 @@ func (c *ServerConn) handleMsg(buf []byte) error {
 				return nil
 			}
 		}
-		return NewError("No script with name: " + msg.Name)
+		return rcError("No script with name: " + msg.Name)
 	}
-	return NewError("Message type '" + rawMsg.Type + "' is not supported.")
+	return rcError("Message type '" + rawMsg.Type + "' is not supported.")
 }
 
 func (c *ServerConn) Run() error {
-	conn, _, err := websocket.DefaultDialer.Dial(c.config.URL, nil)
-	c.conn = conn
+	conn, err := net.Dial("tcp", c.config.URL)
+	c.conn = cw.NewConn(conn)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		c.conn.Close()
+		c.conn.Conn.Close()
 		c.conn = nil
 	}()
 
@@ -109,23 +106,27 @@ func (c *ServerConn) Run() error {
 	log.Println("REGISTRATION COMPLETE!!!!")
 
 	// Starting reader goroutine
-	go func() {
-		for {
-			wsmt, buf, err := c.conn.ReadMessage()
+	go func() (err error) {
+		defer func() {
 			if err != nil {
-				fmt.Println("READ ERROR:", err)
-				break
+				log.Println("End reader cycle with error:", err.Error())
+			} else {
+				log.Println("End reader cycle")
 			}
-			if wsmt == websocket.CloseMessage {
+			close(c.doneChan)
+		}()
+
+		for {
+			mt, buf, err := c.conn.Read()
+			if err != nil {
+				return err
+			}
+			if mt == cw.MsgTypeClose {
 				log.Println("CLOSE MSG:", string(buf))
-				break
-			} else if wsmt == websocket.TextMessage {
-				log.Println("TEXT MSG:", string(buf))
-			} else if wsmt == websocket.BinaryMessage {
-				c.readerChan <- buf
+				return nil
 			}
+			c.readerChan <- readMsg{mt, buf}
 		}
-		close(c.doneChan)
 	}()
 
 	// Reading cycle
@@ -133,14 +134,13 @@ func (c *ServerConn) Run() error {
 		select {
 		case <-c.doneChan:
 			return nil
-		case buf := <-c.readerChan:
-			msg := "OK"
-			if err := c.handleMsg(buf); err != nil {
-				msg = "ERROR: " + err.Error()
-				log.Println("HANDLE ERROR:", err.Error())
-			}
-			if err := c.conn.WriteMessage(websocket.BinaryMessage, []byte(msg)); err != nil {
-				log.Println("WRITE ERROR: ", err.Error())
+		case msg := <-c.readerChan:
+			if msg.mt == cw.MsgTypeRequest {
+				if err := c.handleRequest(msg.buf); err != nil {
+					if err := c.conn.Write(cw.MsgTypeError, []byte(err.Error())); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
@@ -148,9 +148,10 @@ func (c *ServerConn) Run() error {
 
 func (c *ServerConn) Close() error {
 	if c.conn == nil {
-		return NewError("Socket is not connected")
+		return rcError("Socket is not connected")
 	}
-	if err := c.conn.WriteMessage(websocket.CloseMessage, []byte("Buy Buy")); err != nil { // Of course it is not thread safe but now I don't care
+	log.Println("Closing")
+	if err := c.conn.Write(cw.MsgTypeClose, []byte("Buy Buy")); err != nil { // Of course it is not thread safe but now I don't care
 		return err
 	}
 	return nil

@@ -1,10 +1,6 @@
 package api
 
-import "github.com/gorilla/websocket"
-
-type rcError struct {
-	err string
-}
+import cw "github.com/CGSG-2021-AE4/go_utils/conn_wrapper"
 
 type ScriptDescriptor struct {
 	Name string `json:"name"`
@@ -22,12 +18,17 @@ type ServerConn struct {
 	configFilename string
 	config         *Config
 
-	conn       *websocket.Conn
-	readerChan chan []byte
+	conn       *cw.ConnWrapper
+	readerChan chan readMsg
 	doneChan   chan struct{}
 }
 
 // Messages' structs
+type readMsg struct {
+	mt  byte
+	buf []byte
+}
+
 type registerMsg struct { // register
 	Login string `json:"login"`
 }
