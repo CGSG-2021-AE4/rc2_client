@@ -18,7 +18,7 @@ type ServerConn struct {
 	configFilename string
 	config         *Config
 
-	conn       *cw.ConnWrapper
+	conn       *cw.Conn
 	readerChan chan readMsg
 	doneChan   chan struct{}
 }

@@ -91,12 +91,19 @@ func (c *ServerConn) handleRequest(buf []byte) error {
 
 func (c *ServerConn) Run() error {
 	conn, err := net.Dial("tcp", c.config.URL)
-	c.conn = cw.NewConn(conn)
 	if err != nil {
 		return err
 	}
+	// Send validation msg
+	// We are not handling if the validation is wrong because we should not care - it is supposed to work
+	if _, err := conn.Write([]byte("TCP forever!!!")); err != nil {
+		conn.Close()
+		return err
+	}
+
+	c.conn = cw.New(conn)
 	defer func() {
-		c.conn.Conn.Close()
+		c.conn.NetConn.Close()
 		c.conn = nil
 	}()
 
@@ -138,6 +145,10 @@ func (c *ServerConn) Run() error {
 			if msg.mt == cw.MsgTypeRequest {
 				if err := c.handleRequest(msg.buf); err != nil {
 					if err := c.conn.Write(cw.MsgTypeError, []byte(err.Error())); err != nil {
+						return err
+					}
+				} else {
+					if err := c.conn.Write(cw.MsgTypeOk, []byte{}); err != nil {
 						return err
 					}
 				}
